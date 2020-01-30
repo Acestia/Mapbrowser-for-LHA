@@ -1,0 +1,482 @@
+library(shiny)
+library(shinyjs)
+library(DT)
+load("C:Lymphoma MMML.RData")
+#Datensatz laden, der angezeigt werden soll
+
+ui <- fluidPage(
+   shinyjs::useShinyjs(),
+   uiOutput("mainplot_hoverbox", style="position: absolute; 
+            z-index: 1; border-radius: 5px; background-color: #FFFFFFD1; padding: 5px;"),
+   tags$script('
+    $(document).ready(function(){ 
+      $("#mainplot").mousemove(function(e){ 
+        $("#mainplot_hoverbox").css({
+          top: (e.pageY + 5) + "px",
+          left: (e.pageX + 5) + "px",
+          visibility: "visible"
+        }); 
+      }); 
+    });
+    Shiny.addCustomMessageHandler("element_visible", element_visible );
+    function element_visible(message){
+      $(message.id).css({
+        visibility: message.state
+      });
+    };'),
+   
+  #Navigator
+  fluidRow(
+        
+    column(3,
+           fluidRow(
+             column(6, plotOutput("overexpression", height = "40%", click = clickOpts("over_click", clip = TRUE))),
+             column(6, plotOutput("underexpression", height = "40%", click = clickOpts("under_click", clip = TRUE)))),
+           fluidRow(
+             column(6, plotOutput("kmeans", height = "40%", click = clickOpts("kmeans_click", clip = TRUE))),
+             column(6, plotOutput("correlation", height = "40%", click = clickOpts("corr_click", clip = TRUE)))),
+           fluidRow(
+             column(6, plotOutput("dcluster", height = "40%", click = clickOpts("dcluster_click", clip = TRUE))),
+             column(6, plotOutput("group", height = "40%", click = clickOpts("group_click", clip = TRUE)))),
+           fluidRow(
+             column(6, plotOutput("age", height = "40%", click = clickOpts("age_click", clip = TRUE))),
+             column(6, plotOutput("gender", height = "40%", click = clickOpts("gender_click", clip = TRUE)))),
+           fluidRow(
+             column(6, plotOutput("hr", height = "40%", click = clickOpts("hr_click", clip = TRUE))))
+           ),
+            
+    #Main Panel
+    column(5, align = "center",
+           plotOutput("mainplot", height = "60%", click = "click", hover = hoverOpts(id = "mainplot_hover", delay = 1, delayType ="throttle")),
+           checkboxInput("checkbox", "Enable/Disable mask", TRUE),
+           plotOutput("spot", height = "80%")),
+    
+    #DataTable
+    column(4, 
+      dataTableOutput("subtypes"),
+      tabsetPanel(id= "tabsetpanel",
+      tabPanel("Genes", style = "max-height: 100vh; overflow-y: auto;", tags$div(title="Test Hover", dataTableOutput("gene_information"))),
+      tabPanel("Geneset", dataTableOutput("geneset"), tags$head(tags$style("#geneset{max-height: 100vh; overflow-y: auto;}")))))
+  )
+)
+
+server <- function(input, output, session) {
+  
+  # --------------------------- Globale Variablen ------------------------------- ####
+  
+  x_plot <- reactiveVal(0)
+  y_plot <- reactiveVal(0)
+  spotlist <- reactiveVal(NULL)
+  selected_spot <- reactiveVal(0)
+  selected_metagene <- reactiveVal(NULL)
+  spot_genes <- reactiveVal(0)
+  selected_map <- reactiveVal(0)
+  samples_with <- reactiveVal(0)
+  samples_without <- reactiveVal(0)
+  
+  zlim <- max(abs(range(env$pheno.map.sex)))*c(-1,1)
+  gene_names <- env$gene.info$names
+  dim <- env$preferences$dim.1stLvlSom
+  
+  # --------------------------- Side - Panel (View) ----------------------------- ####
+  
+  output$overexpression <- renderPlot({
+    par(mar = c(0.1, 0.1, 1.2, 0.1))
+    image( matrix( env$spot.list.overexpression$overview.map, 
+                   env$preferences$dim.1stLvlSom ),col=env$color.palette.portraits(1000), axes=F, main = "Overexpression")
+  }, height = function() {
+    session$clientData$output_overexpression_width})
+  
+  output$underexpression <- renderPlot({
+    par(mar = c(0.1, 0.1, 1.2, 0.1))
+    image( matrix( env$spot.list.underexpression$overview.map, 
+                   env$preferences$dim.1stLvlSom ),col=env$color.palette.portraits(1000), axes=F, main = "Underexpression")
+  }, height = function() {
+    session$clientData$output_underexpression_width})
+  
+  output$kmeans <- renderPlot({
+    par(mar = c(0.1, 0.1, 1.2, 0.1))
+    image( matrix( env$spot.list.kmeans$overview.map, 
+                   env$preferences$dim.1stLvlSom ),col=env$color.palette.portraits(1000), axes=F, main = "K-means")
+  }, height = function() {
+    session$clientData$output_kmeans_width})
+  
+  output$correlation <- renderPlot({
+    par(mar = c(0.1, 0.1, 1.2, 0.1))
+    image( matrix( env$spot.list.correlation$overview.map, 
+                   env$preferences$dim.1stLvlSom ),col=env$color.palette.portraits(1000), axes=F, main = "Correlation")
+  }, height = function() {
+    session$clientData$output_correlation_width})
+  
+  output$dcluster <- renderPlot({
+    par(mar = c(0.1, 0.1, 1.2, 0.1))
+    image( matrix( env$spot.list.dmap$overview.map, 
+                   env$preferences$dim.1stLvlSom ),col=env$color.palette.portraits(1000), axes=F, main = "D-Cluster")
+  }, height = function() {
+    session$clientData$output_dcluster_width})
+  
+  output$group <- renderPlot({
+    par(mar = c(0.1, 0.1, 1.2, 0.1))
+    image( matrix( env$spot.list.group.overexpression$overview.map, 
+                   env$preferences$dim.1stLvlSom ),col=env$color.palette.portraits(1000), axes=F, main = "Group Overexpr.")
+  }, height = function() {
+    session$clientData$output_group_width})
+  
+  output$age <- renderPlot({
+    par(mar = c(0.1, 0.1, 1.2, 0.1))
+    image( matrix(env$pheno.map.age,env$preferences$dim.1stLvlSom), 
+           col=env$color.palette.heatmaps(1000), axes=F, main = "Age")
+  }, height = function() {
+    session$clientData$output_age_width})
+  
+  output$gender <- renderPlot({
+    par(mar = c(0.1, 0.1, 1.2, 0.1))
+    image( matrix(env$pheno.map.sex,env$preferences$dim.1stLvlSom), 
+           zlim=zlim, col=env$color.palette.heatmaps(1000), axes=F, main = "Sex")
+  }, height = function() {
+    session$clientData$output_gender_width
+  })
+  
+  output$hr <- renderPlot({
+    par(mar = c(0.1, 0.1, 1.2, 0.1))
+    image( matrix(env$pheno.map.HR,env$preferences$dim.1stLvlSom), 
+           col=env$color.palette.heatmaps(1000), axes=F , main = "Hazard Ratio")
+  }, height = function() {
+    session$clientData$output_hr_width})
+  
+  # --------------------------- Side - Panel (Function) ------------------------- ####
+    
+  reset <- function() {
+    selected_spot(NULL)
+    selected_metagene(NULL)
+    samples_with(NULL)
+    samples_without(NULL)
+    if(selected_map() <= 6 && selected_map() != 3){
+      shinyjs::show("checkbox")
+      shinyjs::show("tabsetpanel")}
+    else if(selected_map() == 3){
+      shinyjs::hide("checkbox")
+      shinyjs::show("tabsetpanel")}
+    else {
+      shinyjs::hide("checkbox")
+      shinyjs::hide("tabsetpanel")
+      spotlist(NULL)}}
+  
+  observeEvent(input$over_click, {
+    selected_map(1)
+    reset()
+    list <- env$spot.list.overexpression
+    list$main <- "Overexpression modules"
+    spotlist(list)})
+  
+  observeEvent(input$under_click, {
+    selected_map(2)
+    reset()
+    list <- env$spot.list.underexpression
+    list$main <- "Underexpression modules"
+    spotlist(list)})
+  
+  observeEvent(input$kmeans_click, {
+    selected_map(3)
+    reset()
+    list <- env$spot.list.kmeans
+    list$main <- "Kmeans modules"
+    spotlist(list)})
+  
+  observeEvent(input$corr_click, {
+    selected_map(4)
+    reset()
+    list <- env$spot.list.correlation
+    list$main <- "Correlation modules"
+    spotlist(list)})
+  
+  observeEvent(input$dcluster_click, {
+    selected_map(5)
+    reset()
+    list <- env$spot.list.dmap
+    list$main <- "D-Cluster modules"
+    spotlist(list)})
+  
+  observeEvent(input$group_click, {
+    selected_map(6)
+    reset()
+    list <- env$spot.list.group.overexpression
+    list$main <- "Group overexpression modules"
+    spotlist(list)})
+  
+  observeEvent(input$age_click, {
+    selected_map(7)
+    reset()})
+  
+  observeEvent(input$gender_click, {
+    selected_map(8)
+    reset()})
+  
+  observeEvent(input$hr_click, {
+    selected_map(9)
+    reset()})
+  
+  
+  # --------------------------- Main Panel -------------------------------------- ####
+    
+  output$mainplot <- renderPlot({
+    
+    if(is.null(spotlist())){
+      if (selected_map() == 0){
+        list <- env$spot.list.overexpression
+        list$main <- "Overexpression modules"
+        spotlist(list)
+      
+        mask = matrix(spotlist()$overview.mask,env$preferences$dim.1stLvlSom)
+        mask = is.na(mask)
+        mask[which(mask==F)] = NA
+          
+        par(mar = c(0.1, 0.1, 2.2, 0.1))
+        image( matrix( spotlist()$overview.map, 
+                       env$preferences$dim.1stLvlSom ), col=env$color.palette.portraits(1000), axes=F, main = spotlist()$main)
+        if (input$checkbox == TRUE){
+          image( matrix(spotlist()$overview.map,env$preferences$dim.1stLvlSom),
+                 col=env$color.palette.portraits(1000), axes=F )
+          box()
+          if(any(is.na(matrix(spotlist()$overview.mask)))){
+            par(new=T)
+            image( mask, col="#B0B0B0BB", axes=F )}}}
+      if (selected_map() == 7){
+        par(mar=c(0.1,0.1,2.2,0.1))
+        image( matrix(env$pheno.map.age,env$preferences$dim.1stLvlSom), 
+               col=env$color.palette.heatmaps(1000), axes=F, main = "Age map" )
+        box()}
+      
+      if (selected_map() == 8){
+        par(mar=c(0.1,0.1,2.2,0.1))
+        image( matrix(env$pheno.map.sex,env$preferences$dim.1stLvlSom), 
+               zlim=zlim, col=env$color.palette.heatmaps(1000), axes=F, main = "Sex map" )
+        box()}
+      
+      if (selected_map() == 9){
+        par(mar=c(0.1,0.1,2.2,0.1))
+        image( matrix(env$pheno.map.HR,env$preferences$dim.1stLvlSom), 
+               col=env$color.palette.heatmaps(1000), axes=F, main = "Hazard Ratio map" )
+        box()}}
+    else {
+      mask = matrix(spotlist()$overview.mask,env$preferences$dim.1stLvlSom)
+      mask = is.na(mask)
+      mask[which(mask==F)] = NA
+    
+      par(mar = c(0.1, 0.1, 2.2, 0.1))
+      image( matrix( spotlist()$overview.map, 
+                     env$preferences$dim.1stLvlSom ), col=env$color.palette.portraits(1000), axes=F,  main = spotlist()$main)
+      if (input$checkbox == TRUE){
+        image( matrix(spotlist()$overview.map,env$preferences$dim.1stLvlSom),
+               col=env$color.palette.portraits(1000), axes=F,  main = spotlist()$main)
+        box()
+        if(any(is.na(matrix(spotlist()$overview.mask)))){
+          par(new=T)
+          image( mask, col="#B0B0B0BB", axes=F )}}}
+  }, height = function() {
+    session$clientData$output_mainplot_width})
+  
+  output$mainplot_hoverbox <- renderText({
+    
+    if(is.null(input$mainplot_hover)) {
+      session$sendCustomMessage("element_visible",
+                                message=list(id="#mainplot_hoverbox", state="hidden"))
+      return()}
+    session$sendCustomMessage("element_visible",
+                              message=list(id="#mainplot_hoverbox", state="visible"))
+    
+    x <- ceiling((input$mainplot_hover$x - input$mainplot_hover$domain$left)/
+                   (input$mainplot_hover$domain$right - input$mainplot_hover$domain$left)* dim)
+    y <- ceiling((input$mainplot_hover$y - input$mainplot_hover$domain$bottom)/
+                   (input$mainplot_hover$domain$top - input$mainplot_hover$domain$bottom)* dim)
+    xy_id <- x + (y-1) * env$preferences$dim.1stLvlSom
+    out <- paste( "Coordinate: (", x, ",", y, ")")
+    
+    if(!is.null(spotlist())) {
+    spot <- names(which(sapply(spotlist()$spots, function(x) xy_id %in% x$metagenes)))
+      if(length(spot) == 0){
+        out <- paste( "Coordinate: (", x, ",", y, ")\nSpot: none")}
+      else {
+        out <- paste( "Coordinate: (", x, ",", y, ")\nSpot: ", spot)}}  
+    
+    return(out)
+  })
+  
+  # --------------------------- Click ------------------------------------------- ####
+  
+  observeEvent(input$click, {
+    x <- ceiling((input$click$x - input$click$domain$left)/(input$click$domain$right - input$click$domain$left)* dim)
+    y <- ceiling((input$click$y - input$click$domain$bottom)/(input$click$domain$top - input$click$domain$bottom)* dim)
+    xy_id <- x + (y-1) * env$preferences$dim.1stLvlSom
+    
+    if (selected_map() >= 7){
+      samples.with <- env$metagene.samples[[xy_id]]
+      samples.without <- setdiff(colnames(env$metadata), env$metagene.samples[[xy_id]])
+      samples_with(samples.with)
+      samples_without(samples.without)}
+    else {
+      spot <- names(which(sapply(spotlist()$spots, function(x) xy_id %in% x$metagenes)))
+  
+      if (length(spot) > 0) {
+        metagene <- spotlist()$spots[[spot]]$metagenes
+        genes <- spotlist()$spots[[spot]]$genes
+        spot_genes(genes)
+        selected_metagene(metagene)}
+      else {
+        selected_metagene(NULL)}
+      
+      selected_spot(spot)
+      x_plot(x)
+      y_plot(y)}
+    
+  })
+  
+  output$spot <- renderPlot({
+  
+    if (!is.null(selected_metagene())){
+      for (i in 1: length(selected_metagene())){
+        metagene <- selected_metagene()[i]
+        data <- spotlist()
+        if (x_plot() == ((metagene - 1) %% dim +1) && y_plot() == ((metagene - 1) %/% dim +1)){
+          par(mar=c(2.2, 4.2, 0.4, 0.1))
+          barplot( data$spotdata[selected_spot(),], border = NA, 
+                   col=env$group.colors, names.arg = NA)
+          mtext("samples", 1, line = 1)
+          mtext("expression", 2, line = 2)}}}
+    else{
+      if(!is.null(samples_with())){
+        if (selected_map() == 7){
+          par(mar=c(3.2, 4.2, 1.1, 0.1))
+          hist(as.numeric(env$patient.data["age",samples_with()]), main="Age distribution", ylab= "", xlim=c(0,100), col="gray90" )
+          mtext("age", 1, line = 1.5)
+          mtext("frequency", 2, line = 2)}
+        
+        if (selected_map() == 8){
+          gender.table <- table(env$patient.data["sex",samples_with()])[c("female","male","na")]
+          gender.table <- gender.table[which(!is.na(gender.table))]
+          
+          par(mar=c(1.2, 4.2, 2.1, 0.1))
+          pie(gender.table, main="Sex distribution", col=c("lightpink","cornflowerblue","gray80")[match(names(gender.table), c("female","male","na"))], 
+              labels = paste0(round(prop.table(gender.table)*100, 2), "%"))
+          legend(.9, .3, c("female","male","N/A"), cex = 0.7, fill = c("lightpink","cornflowerblue","gray80"))}
+        
+        if (selected_map() == 9){
+          par(mar=c(3.2, 6.2, 1.1, 0.1))
+          image(matrix(1:100, 1, 100), col = env$color.palette.heatmaps(1000), axes=FALSE)
+          axis(2, round(c(min(env$pheno.map.HR,na.rm=T), max(env$pheno.map.HR,na.rm=T)),1), at=c(0, 1), las=2, tick=FALSE, pos=-0.5, cex.axis=1.4)
+          box()
+          
+          plot.kaplan.meier.curve <- function(fu.time,event.state,col,caption){
+            S.lefttail <- 1
+            n.i <- length(fu.time)
+            
+            S <- rep(NA, n.i)
+            for(t.i in 1:n.i){
+              S[t.i] <- S.lefttail * ((n.i-event.state[t.i]) / n.i)
+              S.lefttail <- S[t.i]
+              n.i <- n.i - 1}
+            
+            S <- c(1, S)
+            names(S) <- c(0, fu.time)
+            
+            S.stairway <- 1
+            t.stariway <- 0
+            i=2
+            for(i in 2:length(S)){
+              if(S[i] == S[i-1]){
+                S.stairway <- c(S.stairway, S[i])
+                t.stariway <- c(t.stariway, fu.time[i-1])} 
+              else{
+                S.stairway <- c(S.stairway, S[i-1] )
+                t.stariway <- c(t.stariway, fu.time[i-1])
+                S.stairway <- c(S.stairway, S[i])
+                t.stariway <- c(t.stariway, fu.time[i-1])}}
+            lines(t.stariway, S.stairway, type="l", col=col, lwd=3)
+            points(fu.time[which(event.state == 0)], S[which(event.state == 0) + 1], pch=3, col=col)
+            text(tail(t.stariway,1)+0.1, tail(S.stairway,1), caption, cex=0.9, adj=0)}
+          fu.time <- env$survival.data["os", intersect(samples_with(), colnames(env$survival.data))]
+          event.state <- env$survival.data["event", intersect(samples_with(), colnames(env$survival.data))]
+          event.state = event.state[order(fu.time)]
+          fu.time = fu.time[order(fu.time)]
+          plot(0, type="n", xlim=c(0,10), ylim=c(0,1), las=1, xlab="", ylab="% overall\nsurvival", cex.axis=1, cex.lab=1)
+          mtext("Overall survival curves", 3)
+          mtext("years", 1, line = 2)
+          plot.kaplan.meier.curve(fu.time, event.state, "blue", "with")
+          fu.time <- env$survival.data["os", intersect(samples_without(), colnames(env$survival.data))]
+          event.state <- env$survival.data[ "event", intersect(samples_without(), colnames(env$survival.data))]
+          event.state = event.state[order( fu.time )]
+          fu.time = fu.time[order(fu.time)]
+          plot.kaplan.meier.curve(fu.time, event.state, "red", "without")}}}
+  }, height = function() {
+    session$clientData$output_overexpression_width})
+  
+  # --------------------------- Side - Panel (Genes) ---------------------------- ###
+  
+  output$subtypes <- renderDataTable({
+    if(selected_map() >= 7 && !is.null(samples_with())){
+      group.table <- table(env$group.labels[samples_with()])[unique(env$group.labels)]
+      group.table <- group.table[which(!is.na(group.table))]
+      
+      group.table <- t( sapply( seq_along(group.table), function(g){
+        c( names(group.table)[g],
+           group.table[g],
+           round(100 * group.table[g]/sum(env$group.labels == names(group.table)[g]), 1))}))
+      
+      colnames(group.table) = c("subtype","#","%")
+      datatable(group.table, options = list(dom = 't'))}
+    else{
+      if(selected_map() >= 7){
+        infotext <- "For more details click on the map!"
+        df <- matrix(infotext)
+        datatable(df, options = list(dom = 't'))}}
+  })
+  
+  output$gene_information <- renderDataTable({
+    if(!is.null(selected_metagene())){
+      df <- data.frame(ensemble = spot_genes(), name = env$gene.info$names[spot_genes()], 
+                       chrname = env$gene.info$chr.name[spot_genes()], chrband = env$gene.info$chr.band[spot_genes()], description = env$gene.info$descriptions[spot_genes()])
+      df <- df[order(df$name),]
+      rownames(df)<-NULL
+      colnames(df)<-c("ID","name", "chr. name", "chr. band", "description")
+    
+      df[df==""] <- NA
+      values <- complete.cases(df)
+      df <- rbind(df[values,], df[!values,])
+      rownames(df) <- seq(length = nrow(df))
+      datatable(df, 
+        options = list(
+          rowCallback = JS(
+          "function(row, df) {",
+          "var full_text =  df[5]",
+          "$('td', row).attr('title', full_text);",
+          "}"),
+        columnDefs = list(list(targets = 5, visible = FALSE))))}
+    else{
+      if(selected_map() <= 6){
+        infotext <- "For more details click a spot on the map!"
+        df <- matrix(infotext)
+        datatable(df, options = list(dom = 't'))}}
+  })
+  
+  output$geneset <- renderDataTable({
+    if(!is.null(selected_metagene())){
+      n.sets <- 40
+      top.gs.p <- sort(spotlist()$spots[[selected_spot()]]$Fisher.p[names(which(sapply(env$gs.def.list, function(x) x$Type) != "Chromatin states" ))])[1:n.sets]
+    
+      df = data.frame(format(top.gs.p, digits=1), paste (sapply(env$gs.def.list[names(top.gs.p)], function(x)
+                            {length(intersect(x$Genes, env$gene.info$ids[spotlist()$spots[[selected_spot()]]$genes]))}), "/", 
+                            sapply(env$gs.def.list[names(top.gs.p)], function(x)
+                            {length(x$Genes)})), names(top.gs.p))
+      
+      colnames (df) = c("p-value", "#in/all", "geneset")
+      rownames(df) <- NULL
+      datatable(df)}
+    else{
+      if(selected_map() <= 6){
+        infotext <- "For more details click a spot on the map!"
+        df <- matrix(infotext)
+        datatable(df, options = list(dom = 't'))}}
+  })
+}
+
+shinyApp(ui, server)
