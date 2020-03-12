@@ -1,10 +1,11 @@
 library(shiny)
 library(shinyjs)
 library(DT)
-load("C:Lymphoma MMML.RData")
+load("H:Lymphoma MMML.RData")
 #Datensatz laden, der angezeigt werden soll
 
 ui <- fluidPage(
+  #JavaScript Hoverbox
    shinyjs::useShinyjs(),
    uiOutput("mainplot_hoverbox", style="position: absolute; 
             z-index: 1; border-radius: 5px; background-color: #FFFFFFD1; padding: 5px;"),
@@ -25,7 +26,7 @@ ui <- fluidPage(
       });
     };'),
    
-  #Navigator
+  #Navigationsmenü
   fluidRow(
         
     column(3,
@@ -45,13 +46,13 @@ ui <- fluidPage(
              column(6, plotOutput("hr", height = "40%", click = clickOpts("hr_click", clip = TRUE))))
            ),
             
-    #Main Panel
+    #Mainpanel
     column(5, align = "center",
            plotOutput("mainplot", height = "60%", click = "click", hover = hoverOpts(id = "mainplot_hover", delay = 1, delayType ="throttle")),
            checkboxInput("checkbox", "Enable/Disable mask", TRUE),
            plotOutput("spot", height = "80%")),
     
-    #DataTable
+    #Gen-, Genset-, Subtyptabellen
     column(4, 
       dataTableOutput("subtypes"),
       tabsetPanel(id= "tabsetpanel",
@@ -145,23 +146,31 @@ server <- function(input, output, session) {
     session$clientData$output_hr_width})
   
   # --------------------------- Side - Panel (Function) ------------------------- ####
-    
+   
+  #reset-Funktion
   reset <- function() {
     selected_spot(NULL)
     selected_metagene(NULL)
     samples_with(NULL)
     samples_without(NULL)
+    
+    #Sichtbarkeitseinstellung: Maps mit Maske
     if(selected_map() <= 6 && selected_map() != 3){
       shinyjs::show("checkbox")
       shinyjs::show("tabsetpanel")}
+    
+    #Sichtbarkeitseinstellung: Map ohne Maske
     else if(selected_map() == 3){
       shinyjs::hide("checkbox")
       shinyjs::show("tabsetpanel")}
+    
+    #Sichtbarkeitseinstellung: Phaenotypmaps
     else {
       shinyjs::hide("checkbox")
       shinyjs::hide("tabsetpanel")
       spotlist(NULL)}}
   
+  #Klick-Event Thumbnails
   observeEvent(input$over_click, {
     selected_map(1)
     reset()
@@ -217,8 +226,9 @@ server <- function(input, output, session) {
     reset()})
   
   
-  # --------------------------- Main Panel -------------------------------------- ####
+  # --------------------------- Mainpanel -------------------------------------- ####
     
+  #Mainplot-Generierung
   output$mainplot <- renderPlot({
     
     if(is.null(spotlist())){
@@ -259,39 +269,58 @@ server <- function(input, output, session) {
                col=env$color.palette.heatmaps(1000), axes=F, main = "Hazard Ratio map" )
         box()}}
     else {
+      
+      #Initialisierung der Maske
       mask = matrix(spotlist()$overview.mask,env$preferences$dim.1stLvlSom)
       mask = is.na(mask)
       mask[which(mask==F)] = NA
     
+      #Checkbox nicht selektiert
       par(mar = c(0.1, 0.1, 2.2, 0.1))
       image( matrix( spotlist()$overview.map, 
                      env$preferences$dim.1stLvlSom ), col=env$color.palette.portraits(1000), axes=F,  main = spotlist()$main)
+      
+      #Checkbox selektiert
       if (input$checkbox == TRUE){
         image( matrix(spotlist()$overview.map,env$preferences$dim.1stLvlSom),
                col=env$color.palette.portraits(1000), axes=F,  main = spotlist()$main)
         box()
+        
+        #Integrierung der Maske
         if(any(is.na(matrix(spotlist()$overview.mask)))){
           par(new=T)
           image( mask, col="#B0B0B0BB", axes=F )}}}
   }, height = function() {
     session$clientData$output_mainplot_width})
   
+  #Hoverbox
   output$mainplot_hoverbox <- renderText({
     
+    #Ausblenden der Hoverbox
     if(is.null(input$mainplot_hover)) {
       session$sendCustomMessage("element_visible",
                                 message=list(id="#mainplot_hoverbox", state="hidden"))
       return()}
+    
+    #Einblenden der Hoverbox
     session$sendCustomMessage("element_visible",
                               message=list(id="#mainplot_hoverbox", state="visible"))
     
+    #Berechnung der x-Koordinate
     x <- ceiling((input$mainplot_hover$x - input$mainplot_hover$domain$left)/
                    (input$mainplot_hover$domain$right - input$mainplot_hover$domain$left)* dim)
+    
+    #Berechnung der y-Koordinate
     y <- ceiling((input$mainplot_hover$y - input$mainplot_hover$domain$bottom)/
                    (input$mainplot_hover$domain$top - input$mainplot_hover$domain$bottom)* dim)
+    
+    #Berechnung des Metagens
     xy_id <- x + (y-1) * env$preferences$dim.1stLvlSom
+    
+    #Ausgabe Phaenotypmaps
     out <- paste( "Coordinate: (", x, ",", y, ")")
     
+    #Ausgabe Modulmaps
     if(!is.null(spotlist())) {
     spot <- names(which(sapply(spotlist()$spots, function(x) xy_id %in% x$metagenes)))
       if(length(spot) == 0){
@@ -302,7 +331,7 @@ server <- function(input, output, session) {
     return(out)
   })
   
-  # --------------------------- Click ------------------------------------------- ####
+  # --------------------------- Click ------------------------------------------- ####################
   
   observeEvent(input$click, {
     x <- ceiling((input$click$x - input$click$domain$left)/(input$click$domain$right - input$click$domain$left)* dim)
@@ -410,7 +439,7 @@ server <- function(input, output, session) {
   }, height = function() {
     session$clientData$output_overexpression_width})
   
-  # --------------------------- Side - Panel (Genes) ---------------------------- ###
+  # --------------------------- Gen-, Genset-, Subtyptabellen  ---------------------------- #####
   
   output$subtypes <- renderDataTable({
     if(selected_map() >= 7 && !is.null(samples_with())){
